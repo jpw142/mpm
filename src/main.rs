@@ -27,7 +27,7 @@ use rayon::prelude::*;
 
 mod cam;
 
-const grid_res: i32 = 64;
+pub const grid_res: i32 = 64;
 const num_cells: usize = (grid_res * grid_res) as usize;
 
 const dt: f32 = 0.2;
@@ -81,6 +81,7 @@ fn main() {
                 cam::PlayerPlugin,
                 ))
         .insert_resource(Grid{g: vec![Cell::new(); num_cells]})
+        .insert_resource(ClearColor(Color::rgb(1., 1., 1.)))
         .add_systems(Startup, initialize)
         .add_systems(Update, (
                 draw_grid,
@@ -98,8 +99,11 @@ fn initialize(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let particle_mesh = meshes.add(Mesh::from(shape::UVSphere{radius: 0.25, ..default()}));
-	let particle_material = materials.add(Color::rgb(0.0, 0.0, 1.).into());
-    
+    let particle_material = materials.add(StandardMaterial{
+        base_color: Color::rgb(0.537, 0.612, 0.941),
+        unlit: true,
+        ..default()
+    }); 
     let multiplier = 2;
     let box_x = 32; 
     let box_y = 32;
@@ -118,6 +122,19 @@ fn initialize(
 
         }
     }
+
+    commands
+        .spawn(PointLightBundle {
+            // transform: Transform::from_xyz(5.0, 8.0, 2.0),
+            transform: Transform::from_xyz(1.0, 2.0, 0.0),
+            point_light: PointLight {
+                intensity: 1600.0, // lumens - roughly a 100W non-halogen incandescent bulb
+                color: Color::WHITE,
+                shadows_enabled: false,
+                ..default()
+            },
+            ..default()
+        });
 }
 
 fn clear_grid (
