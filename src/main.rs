@@ -1,25 +1,6 @@
 #![allow(non_upper_case_globals, non_snake_case, dead_code)]
 // https://github.com/dimforge/sparkl/blob/master/src/dynamics/particle.rs#L29
 // https://phatymah.medium.com/calculation-of-the-address-of-an-element-in-1d-2d-and-3d-array-6a296ad81d1e
-/*
-Address of A[i][j][k] = B + S*(R*C*(i − L.R.) + C*(j − L.C.) + (k − L.W.))
-Address of A[i][j][k] = R*C*(i) + C*(j) + (k)
-Address of A[i][j][k] = 64*(i) + 8*(j) + (k)
-A = name of the array
-
-i = block a subset of an element whose address is to be found
-
-j = row subset of an element whose address is to be found
-
-k = column subset of an element whose address is to be calculated
-
-B = Base address i.e. address of the first element of arrays/address of an array
-
-R = total number of rows in an array
-
-C = total number of columns in an array
-
-*/
 // use bevy::diagnostic::{LogDiagnosticsPlugin, FrameTimeDiagnosticsPlugin}iii;
 use bevy::{prelude::*, diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}};
 // use bevy_inspector_egui::quick::WorldInspectorPlugin;
@@ -27,10 +8,10 @@ use rayon::prelude::*;
 
 mod cam;
 
-pub const grid_res: i32 = 64;
-const num_cells: usize = (grid_res * grid_res) as usize;
+pub const grid_res: i32 = 32;
+const num_cells: usize = (grid_res * grid_res * grid_res) as usize;
 
-const dt: f32 = 0.2;
+const dt: f32 = 0.4;
 const sim_iterations: i32 = (1./dt) as i32;
 
 const gravity: f32 = -0.3;
@@ -43,26 +24,26 @@ const eos_power: f32 = 4.;
 
 #[derive(Component, Clone, Copy)]
 struct Particle {
-    v: Vec2,    // velocity
-    C: Mat2,     // affine momentum matrix
+    v: Vec3,    // velocity
+    C: Mat3,     // affine momentum matrix
     m: f32,     // mass
 }
 
 #[derive(Component, Debug, Clone, Copy)]
 struct Cell {
     // https://github.com/rust-lang/rust/issues/72353 
-    v: Vec2,    // velocity Z 
+    v: Vec3,    // velocity Z 
     m: f32,     // mass
 }
 
 impl Cell {
     pub fn new() -> Self {
-        return Cell { v:Vec2::ZERO, m: 0. }
+        return Cell { v:Vec3::ZERO, m: 0. }
     }
 
     pub fn zero(&mut self) {
         self.m = 0.;
-        self.v = Vec2::ZERO;
+        self.v = Vec3::ZERO;
     }
 }
 
@@ -101,39 +82,44 @@ fn initialize(
     let particle_mesh = meshes.add(Mesh::from(shape::UVSphere{radius: 0.25, ..default()}));
     let particle_material = materials.add(StandardMaterial{
         base_color: Color::rgb(0.537, 0.612, 0.941),
-        unlit: true,
+        unlit: false,
         ..default()
     }); 
     let multiplier = 2;
-    let box_x = 32; 
-    let box_y = 32;
+    let box_x = 16; 
+    let box_y = 16;
+    let box_z = 16;
+
     let sx = grid_res / 2;
     let sy = grid_res / 2;
+    let sz = grid_res / 2;
     for i in (sx - box_x/2) * 2..(sx + box_x/2) * 2 {
         for j in (sy - box_y/2) * multiplier..(sy + box_y/2) * multiplier {
-            commands.spawn(PbrBundle {
-                mesh: particle_mesh.clone(),
-                material: particle_material.clone(),
-                transform: Transform::from_translation(Vec3::new(
-                        i as f32/multiplier as f32, j as f32/multiplier as f32, 1.,
-                        )),
-                        ..Default::default()
-            }).insert(Particle{v: Vec2::ZERO, C: Mat2::ZERO, m: 1.});
-
+            for k in (sz - box_z/2) * multiplier..(sz + box_z/2) * multiplier {
+                commands.spawn(PbrBundle {
+                    mesh: particle_mesh.clone(),
+                    material: particle_material.clone(),
+                    transform: Transform::from_translation(Vec3::new(
+                            i as f32/multiplier as f32, j as f32/multiplier as f32, k as f32/multiplier as f32,
+                            )),
+                            ..Default::default()
+                }).insert(Particle{v: Vec3::ZERO, C: Mat3::ZERO, m: 1.});
+            }
         }
     }
 
-    commands
-        .spawn(PointLightBundle {
-            // transform: Transform::from_xyz(5.0, 8.0, 2.0),
-            transform: Transform::from_xyz(1.0, 2.0, 0.0),
-            point_light: PointLight {
-                intensity: 1600.0, // lumens - roughly a 100W non-halogen incandescent bulb
-                color: Color::WHITE,
-                shadows_enabled: false,
+    commands.spawn(SpotLightBundle {
+            transform: Transform::from_xyz(grid_res as f32 / 2., grid_res as f32 - 10., grid_res as f32 / 2.)
+                .looking_at(Vec3::new(grid_res as f32 / 2., 0.0, grid_res as f32 / 2.), Vec3::X),
+                spot_light: SpotLight {
+                    intensity: 16000.0, // lumens - roughly a 100W non-halogen incandescent bulb
+                    color: Color::WHITE,
+                    shadows_enabled: true,
+                    inner_angle: 120.,
+                    outer_angle: 2.,
+                    ..default()
+                },
                 ..default()
-            },
-            ..default()
         });
 }
 
@@ -164,22 +150,25 @@ fn p2g1 (
 
         for gx in 0..3 {
             for gy in 0..3 {
-                let weight = weights[gx].x * weights[gy].y;
+                for gz in 0..3 {
+                    let weight = weights[gx].x * weights[gy].y * weights[gz].z;
 
-                let cell_x = Vec2::from([
-                                        (cell_idx.x + gx as f32 - 1.).floor(), 
-                                        (cell_idx.y + gy as f32- 1.).floor(),
-                ]);
-                let cell_dist = (cell_x - Vec2::from((t.translation.x, t.translation.y))) + 0.5;
-                // TODO Make sure it's component multiplication, aka x*x y*y z*z
-                let Q = p.C * cell_dist;
+                    let cell_x = Vec3::from([
+                                            (cell_idx.x + gx as f32 - 1.).floor(), 
+                                            (cell_idx.y + gy as f32 - 1.).floor(),
+                                            (cell_idx.z + gz as f32 - 1.).floor(),
+                    ]);
+                    let cell_dist = (cell_x - t.translation) + 0.5;
+                    // TODO Make sure it's component multiplication, aka x*x y*y z*z
+                    let Q = p.C * cell_dist;
 
-                let mass_contrib = weight * p.m;
-                let cell_index = (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
-                // TODO This is the only section stopping full parrelelization, can't get lockfree access to grid, maybe atomics?
-                // AtomicPtr
-                grid.g[cell_index as usize].m += mass_contrib;
-                grid.g[cell_index as usize].v += mass_contrib * (p.v + Vec2::from(Q));
+                    let mass_contrib = weight * p.m;
+                    let cell_index = (cell_x.z as usize * grid_res as usize * grid_res as usize) + (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
+                    // TODO This is the only section stopping full parrelelization, can't get lockfree access to grid, maybe atomics?
+                    // AtomicPtr
+                    grid.g[cell_index as usize].m += mass_contrib;
+                    grid.g[cell_index as usize].v += mass_contrib * (p.v + Vec3::from(Q));
+                }
             }
         }
     });
@@ -203,27 +192,32 @@ fn p2g2 (
         let mut density: f32 = 0.;
         for gx in 0..3 {
             for gy in 0..3 {
-                    let weight = weights[gx].x * weights[gy].y;
-                    let cell_x = Vec2::from([
+                for gz in 0..3 {
+                    let weight = weights[gx].x * weights[gy].y * weights[gz].z;
+                    let cell_x = Vec3::from([
                         (cell_idx.x + gx as f32 - 1.).floor(), 
                         (cell_idx.y + gy as f32 - 1.).floor(),
+                        (cell_idx.z + gz as f32 - 1.).floor(),
                     ]);
-                    let cell_index = (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
+                    let cell_index = (cell_x.z as usize * grid_res as usize * grid_res as usize) + (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
                     density += grid.g[cell_index as usize].m * weight;
+                }
             }
         }
         let volume = p.m / density;
         let pressure = (-0.1_f32).max(eos_stiffness * (density / rest_density).powf(eos_power) - 1.);
         // ! THIS IS 100% WRONG FOR 3D PLEASE HELP
-        let mut stress = Mat2::from_cols_array(&[
-                                               -pressure, 0., 
-                                               0., -pressure
+        let mut stress = Mat3::from_cols_array(&[
+                                               -pressure, 0., 0., 
+                                               0., -pressure, 0.,
+                                               0., 0., -pressure,
         ]);
         let mut strain = p.C;
 
-        let trace = strain.y_axis.x + strain.x_axis.y;
-        strain.x_axis.y = trace;
-        strain.y_axis.x = trace;
+        let trace = strain.z_axis.x + strain.y_axis.y + strain.x_axis.x;
+        strain.x_axis.z = trace;
+        strain.y_axis.y = trace;
+        strain.z_axis.x = trace;
 
         let viscosity_term = dynamic_viscosity * strain;
         stress += viscosity_term;
@@ -232,17 +226,20 @@ fn p2g2 (
 
         for gx in 0..3 {
             for gy in 0..3 {
-                let weight = weights[gx].x * weights[gy].y;
+                for gz in 0..3 {
+                    let weight = weights[gx].x * weights[gy].y * weights[gz].z;
 
-                let cell_x = Vec2::from([
-                                        (cell_idx.x + gx as f32 - 1.).floor(), 
-                                        (cell_idx.y + gy as f32 - 1.).floor(),
-                ]);
-                let cell_dist = (cell_x - Vec2::from((t.translation.x, t.translation.y))) + 0.5;
-                let cell_index = (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
+                    let cell_x = Vec3::from([
+                                            (cell_idx.x + gx as f32 - 1.).floor(), 
+                                            (cell_idx.y + gy as f32 - 1.).floor(),
+                                            (cell_idx.z + gz as f32 - 1.).floor(),
+                    ]);
+                    let cell_index = (cell_x.z as usize * grid_res as usize * grid_res as usize) + (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
+                    let cell_dist = (cell_x - t.translation) + 0.5;
 
-                let momentum = eq_16_term_0 * weight * cell_dist;
-                grid.g[cell_index as usize].v += Vec2::from(momentum);
+                    let momentum = eq_16_term_0 * weight * cell_dist;
+                    grid.g[cell_index as usize].v += Vec3::from(momentum);
+                }
             }
         }
     });
@@ -256,10 +253,13 @@ fn update_grid (
         if cell.m > 0. {
             cell.v /= cell.m;
             cell.v.y += dt * gravity;
-            let x = i / grid_res as usize;
+            
+            let z = i /(grid_res as usize * grid_res as usize);
+            let x = (i % (grid_res * grid_res) as usize) / grid_res as usize;
             let y = i % grid_res as usize;
             if (x < 2) || (x > (grid_res - 3) as usize) { cell.v.x = 0.}
             if (y < 2) || (y > (grid_res - 3) as usize) { cell.v.y = 0.}
+            if (z < 2) || (z > (grid_res - 3) as usize) { cell.v.z = 0.}
         }
     }
 }
@@ -268,9 +268,9 @@ fn g2p (
     grid: ResMut<Grid>,
     mut query: Query<(&mut Particle, &mut Transform)>,
 ) {
-    query.for_each_mut(|(mut p, mut t)| {
+    query.par_iter_mut().for_each_mut(|(mut p, mut t)| {
 
-        p.v = Vec2::ZERO;
+        p.v = Vec3::ZERO;
 
         let cell_idx = t.translation.floor();
         let cell_diff = (t.translation - cell_idx) - 0.5;
@@ -283,40 +283,44 @@ fn g2p (
 
         // estimating particle volume by summing up neighbourhood's weighted mass contribution
         // MPM course, equation 152 
-        let mut b: Mat2 = Mat2::ZERO;
+        let mut b: Mat3 = Mat3::ZERO;
         for gx in 0..3 {
             for gy in 0..3 {
-                let weight = weights[gx].x * weights[gy].y;
+                for gz in 0..3 {
+                    let weight = weights[gx].x * weights[gy].y * weights[gz].z;
 
-                let cell_x = Vec2::from([
-                                        (cell_idx.x + gx as f32 - 1.).floor(), 
-                                        (cell_idx.y + gy as f32 - 1.).floor(),
-                ]);
-                let cell_index = (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
-                let dist = (cell_x - Vec2::from((t.translation.x, t.translation.y))) + 0.5;
-                let w_v = grid.g[cell_index as usize].v * weight;
+                    let cell_x = Vec3::from([
+                                            (cell_idx.x + gx as f32 - 1.).floor(), 
+                                            (cell_idx.y + gy as f32 - 1.).floor(),
+                                            (cell_idx.z + gz as f32 - 1.).floor(),
+                    ]);
+                    let cell_index = (cell_x.z as usize * grid_res as usize * grid_res as usize) + (cell_x.x as usize * grid_res as usize) + cell_x.y as usize;
+                    let dist = (cell_x - t.translation) + 0.5;
+                    let w_v = grid.g[cell_index as usize].v * weight;
 
-                let term = Mat2::from_cols(w_v * dist.x, w_v * dist.y);
+                    let term = Mat3::from_cols(w_v * dist.x, w_v * dist.y, w_v * dist.z);
 
-                b += term;
+                    b += term;
 
-                p.v += w_v;
+                    p.v += w_v;
+                }
             }
         }
         p.C = b.mul_scalar(4.);
-        t.translation.x += p.v.x * dt;
-        t.translation.y += p.v.y * dt;
-        
-        t.translation.x = t.translation.x.clamp(1., grid_res as f32 - 2.);
-        t.translation.y = t.translation.y.clamp(1., grid_res as f32 - 2.);
 
-        let x_n = Vec2::from((t.translation.x, t.translation.y)) + p.v;
+        t.translation += p.v * dt;
+
+        t.translation = t.translation.clamp(Vec3::splat(1.), Vec3::splat(grid_res as f32 - 2.));
+
+        let x_n = t.translation + p.v;
         let wall_min = 3.;
         let wall_max = grid_res as f32 - 2.;
         if x_n.x < wall_min{ p.v.x += wall_min - x_n.x};
         if x_n.x > wall_max{ p.v.x += wall_max - x_n.x};
         if x_n.y < wall_min{ p.v.y += wall_min - x_n.y};
         if x_n.y > wall_max{ p.v.y += wall_max - x_n.y};
+        if x_n.z < wall_min{ p.v.z += wall_min - x_n.z};
+        if x_n.z > wall_max{ p.v.z += wall_max - x_n.z};
 
 
 
