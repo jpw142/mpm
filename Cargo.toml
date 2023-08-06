@@ -12,6 +12,9 @@ bevy = "0.11"
 smooth-bevy-cameras = "0.8"
 rand = "0.8.5"
 rayon = "1.7.0"
+anyhow = "1.0.72"
+bytemuck = "1.13.1"
+memmap2 = "0.7.1"
 
 [profile.dev]
 opt-level = 3

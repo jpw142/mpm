@@ -1,14 +1,19 @@
 #![allow(non_upper_case_globals, non_snake_case, dead_code)]
+use core::fmt;
+
 // https://github.com/dimforge/sparkl/blob/master/src/dynamics/particle.rs#L29
 // https://phatymah.medium.com/calculation-of-the-address-of-an-element-in-1d-2d-and-3d-array-6a296ad81d1e
 // use bevy::diagnostic::{LogDiagnosticsPlugin, FrameTimeDiagnosticsPlugin}iii;
-use bevy::{prelude::*, diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}};
+use bevy::{prelude::*, diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin}, math::Vec3A};
 // use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use rayon::prelude::*;
-
+use bytemuck::{Pod, Zeroable};
 mod cam;
+mod spgrid;
 
-pub const grid_res: i32 = 32;
+use crate::spgrid::*;
+
+pub const grid_res: i32 = 128;
 const num_cells: usize = (grid_res * grid_res * grid_res) as usize;
 
 const dt: f32 = 0.4;
@@ -29,16 +34,17 @@ struct Particle {
     m: f32,     // mass
 }
 
-#[derive(Component, Debug, Clone, Copy)]
-struct Cell {
+#[repr(C)]
+#[derive(Component, Debug, Clone, Copy, Pod, Zeroable)]
+struct Node {
     // https://github.com/rust-lang/rust/issues/72353 
     v: Vec3,    // velocity Z 
     m: f32,     // mass
 }
 
-impl Cell {
+impl Node {
     pub fn new() -> Self {
-        return Cell { v:Vec3::ZERO, m: 0. }
+        return Node { v:Vec3::ZERO, m: 0. }
     }
 
     pub fn zero(&mut self) {
@@ -48,7 +54,11 @@ impl Cell {
 }
 
 #[derive(Resource)]
-struct Grid{g: Vec<Cell>}
+struct Grid{g: Vec<Node>}
+
+#[derive(Resource)]
+struct SPGRID(SpGrid::<Node>);
+
 
 fn main() {
     App::new()
@@ -61,7 +71,8 @@ fn main() {
                 FrameTimeDiagnosticsPlugin::default(),
                 cam::PlayerPlugin,
                 ))
-        .insert_resource(Grid{g: vec![Cell::new(); num_cells]})
+        .insert_resource(SPGRID(SpGrid::<Node>::new(1.).unwrap()))
+        .insert_resource(Grid{g: vec![Node::new(); num_cells]})
         .insert_resource(ClearColor(Color::rgb(1., 1., 1.)))
         .add_systems(Startup, initialize)
         .add_systems(Update, (
@@ -74,6 +85,7 @@ fn main() {
                 ))
         .run();
 }
+
 fn initialize(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -96,14 +108,18 @@ fn initialize(
     for i in (sx - box_x/2) * 2..(sx + box_x/2) * 2 {
         for j in (sy - box_y/2) * multiplier..(sy + box_y/2) * multiplier {
             for k in (sz - box_z/2) * multiplier..(sz + box_z/2) * multiplier {
-                commands.spawn(PbrBundle {
-                    mesh: particle_mesh.clone(),
-                    material: particle_material.clone(),
-                    transform: Transform::from_translation(Vec3::new(
-                            i as f32/multiplier as f32, j as f32/multiplier as f32, k as f32/multiplier as f32,
-                            )),
-                            ..Default::default()
-                }).insert(Particle{v: Vec3::ZERO, C: Mat3::ZERO, m: 1.});
+               commands.spawn(PbrBundle {
+                   mesh: particle_mesh.clone(),
+                   material: particle_material.clone(),
+                   transform: Transform::from_translation(Vec3::new(
+                           i as f32/multiplier as f32, j as f32/multiplier as f32, k as f32/multiplier as f32,
+                           )),
+                           ..Default::default()
+               }).insert(Particle{v: Vec3::ZERO, C: Mat3::ZERO, m: 1.});
+
+               // commands.spawn(Particle{v: Vec3::ZERO, C: Mat3::ZERO, m: 1.})
+               //     .insert(Transform::from_translation((Vec3::new(
+               //             i as f32/multiplier as f32, j as f32/multiplier as f32, k as f32/multiplier as f32))));
             }
         }
     }

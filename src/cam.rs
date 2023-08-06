@@ -85,7 +85,7 @@ fn initial_grab_cursor(mut primary_window: Query<&mut Window, With<PrimaryWindow
 fn setup_player(mut commands: Commands) {
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(target, target, target * 2.5).looking_at(Vec3::from((target, target, 1.)), Vec3::Y),
+            transform: Transform::from_xyz(target * 1.5, target*2.5, target * 1.5).looking_at(Vec3::from((target, 0., target)), Vec3::Z),
             ..Default::default()
         },
         FlyCam,
